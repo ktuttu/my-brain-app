@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Brain Extension</title>
+    <style>
+        :root { --primary-color: #4A90E2; --bg-color: #f5f7fa; --card-bg: #ffffff; --text-color: #333; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 0; }
+        header { background: var(--primary-color); color: white; padding: 1rem; text-align: center; font-weight: bold; }
+        .tab-bar { position: sticky; top: 0; width: 100%; background: white; display: flex; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .tab-item { padding: 15px 0; flex: 1; text-align: center; color: #888; cursor: pointer; border-bottom: 3px solid transparent; }
+        .tab-item.active { color: var(--primary-color); font-weight: bold; border-bottom: 3px solid var(--primary-color); }
+        .container { padding: 15px; max-width: 600px; margin: 0 auto; padding-bottom: 100px; }
+        
+        .card { background: var(--card-bg); border-radius: 12px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); cursor: pointer; border: 2px solid transparent; transition: 0.2s; }
+        .card:active { transform: scale(0.98); }
+        .task-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .task-row:last-child { border-bottom: none; }
+        .task-completed { color: #aaa; text-decoration: line-through; }
+        .task-text-done { color: #aaa; }
+        
+        input[type="checkbox"] { width: 22px; height: 22px; cursor: pointer; }
+        .progress-container { background: #eee; border-radius: 10px; height: 6px; margin: 8px 0; overflow: hidden; }
+        .progress-bar { background: var(--primary-color); height: 100%; transition: width 0.3s; }
+
+        #form-overlay, #detail-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
+        .form-container { background: white; width: 90%; max-width: 500px; border-radius: 15px; padding: 20px; max-height: 85vh; overflow-y: auto; }
+        .fab { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background: var(--primary-color); color: white; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 35px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1500; cursor: pointer; }
+        
+        button { background: var(--primary-color); color: white; border: none; padding: 12px; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer; border: none !important; }
+        .page { display: none; }
+        .page.active { display: block; }
+        input[type="text"], textarea, select { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 1rem; }
+        label { font-size: 0.85rem; font-weight: bold; color: #666; display: block; margin-top: 10px; }
+
+        @keyframes flash { 0% { background: #fff; } 50% { background: #e3f2fd; } 100% { background: #fff; } }
+        .highlight { animation: flash 1.5s ease-in-out; border-color: var(--primary-color) !important; }
+
+        .task-text-done {
+            opacity: 0.6;
+            background-color: #f9f9f9 !important;
+        }
+        .task-text-done div, .task-text-done span {
+            color: #888 !important;
+        }
+    </style>
+</head>
+<body>
+
+<header>My Brain Extension</header>
+<nav class="tab-bar">
+    <div id="tab-goals" class="tab-item active" onclick="showPage('goals')">目標</div>
+    <div id="tab-tasks" class="tab-item" onclick="showPage('tasks')">タスク</div>
+    <div id="tab-logs" class="tab-item" onclick="showPage('logs')">記録</div>
+</nav>
+
+<div class="container">
+    <div id="page-goals" class="page active"><h2>目標一覧</h2><div id="list-goals"></div></div>
+    <div id="page-tasks" class="page">
+        <h2>タスク一覧</h2>
+        <div style="margin-bottom:15px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+            <select id="task-sort-mode" onchange="renderTasks()" style="flex:1; margin:0; padding:8px; font-size:0.8rem;">
+                <option value="date">期限順 (デフォルト)</option>
+                <option value="priority">優先度順</option>
+                <option value="goal">目標別</option>
+                <option value="parent">親タスク別</option>
+            </select>
+            <input type="text" id="task-search" placeholder="検索..." oninput="renderTasks()" style="flex:1; margin:0; padding:8px; font-size:0.8rem;">
+            
+            <label style="display:flex; align-items:center; gap:5px; font-size:0.75rem; margin:0; cursor:pointer; white-space:nowrap;">
+                <input type="checkbox" id="task-filter-incomplete" onchange="renderTasks()" style="width:16px; height:16px; margin:0;">
+                未完了のみ
+            </label>
+        </div>
+    <div id="list-tasks"></div>
+</div>
+    <div id="page-logs" class="page">
+        <h2>記録一覧</h2>
+        
+        <div class="log-tabs" style="display:flex; background:#eee; border-radius:10px; padding:4px; margin-bottom:15px;">
+            <div class="log-tab-item active" onclick="switchLogTab('すべて', this)" style="flex:1; text-align:center; padding:8px; cursor:pointer; border-radius:8px; font-size:0.85rem;">すべて</div>
+            <div class="log-tab-item" onclick="switchLogTab('思考の壁打ち', this)" style="flex:1; text-align:center; padding:8px; cursor:pointer; border-radius:8px; font-size:0.85rem;">思考</div>
+            <div class="log-tab-item" onclick="switchLogTab('英語日記', this)" style="flex:1; text-align:center; padding:8px; cursor:pointer; border-radius:8px; font-size:0.85rem;">英語</div>
+            <div class="log-tab-item" onclick="switchLogTab('読書記録', this)" style="flex:1; text-align:center; padding:8px; cursor:pointer; border-radius:8px; font-size:0.85rem;">読書</div>
+        </div>
+
+        <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 15px; width: 100%;">
+            <input type="text" id="search-input" oninput="renderLogs(this.value)" placeholder="記録を検索..." 
+                style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.9rem; outline: none;">
+            
+            <button id="root-filter-btn" onclick="toggleRootFilter()" 
+                    style="width: 70px; height: 40px; padding: 0; background: #f0f2f5; border: 1px solid #ddd; border-radius: 8px; font-size: 0.75rem; cursor: pointer; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.2;">
+                <span id="root-filter-icon" style="font-size: 1rem;">🔘</span>
+                <span style="font-size: 0.6rem;">親のみ</span>
+            </button>
+        </div>
+
+        <div id="list-logs"></div>
+    </div>
+</div>
+
+<div class="fab" onclick="openForm()">＋</div>
+
+<div id="detail-overlay" onclick="this.style.display='none'">
+    <div class="form-container" onclick="event.stopPropagation()">
+        <h2 id="detail-title"></h2>
+        <div id="detail-dynamic-body"></div> 
+    </div>
+</div>
+
+<div id="form-overlay" onclick="this.style.display='none'">
+    <div class="form-container" onclick="event.stopPropagation()">
+        <h2 id="form-title">新規作成</h2>
+        <div id="form-content"></div>
+        <div style="display:flex; gap:10px; margin-top:15px;">
+            <button style="background:#666;" onclick="document.getElementById('form-overlay').style.display='none'">中止</button>
+            <button onclick="submitForm()">保存する</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbzGcijJMjdK0ewoXL1Mlvytkypf5-jFvT25i_ZozvxoRkRGmVmYxwSskfziSjlFl0Oc/exec";
+    let db = { Goals: [], Tasks: [], Logs: [] };
+    let currentPage = 'goals';
+
+    window.onload = refreshData;
+
+    async function refreshData() {
+        // 3回呼んでいたのを1回にまとめる
+        const res = await fetch(`${GAS_URL}?action=fetchAll`);
+        const allData = await res.json();
+        db.Goals = allData.Goals;
+        db.Tasks = allData.Tasks;
+        db.Logs = allData.Logs;
+        
+        renderGoals(); renderTasks(); renderLogs();
+    }
+
+    // どこからでも使えるように関数の外に置く
+    function formatDate(dateStr) {
+        if (!dateStr) return "";
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return dateStr; 
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    }
+
+    async function fetchData(sheetName) {
+        try {
+            const res = await fetch(`${GAS_URL}?sheetName=${sheetName}`);
+            const data = await res.json();
+            db[sheetName === 'Daily_Logs' ? 'Logs' : sheetName] = data;
+        } catch(e) { console.error("Fetch error:", e); }
+    }
+
+    function calculateProgress(tasks) {
+        if (tasks.length === 0) return 0;
+        const completed = tasks.filter(t => t[5] === '完了').length;
+        return Math.round((completed / tasks.length) * 100);
+    }
+
+    function showPage(p) {
+        currentPage = p;
+        document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-item').forEach(el => el.classList.remove('active'));
+        document.getElementById('page-' + p).classList.add('active');
+        document.getElementById('tab-' + p).classList.add('active');
+
+        // タブを切り替えた時に最新の状態で再描画する
+        if (p === 'goals') renderGoals();
+        else if (p === 'tasks') renderTasks();
+        else if (p === 'logs') renderLogs();
+    }
+
+    function renderGoals() {
+        const container = document.getElementById('list-goals');
+        container.innerHTML = "";
+        const now = new Date();
+        const currentYear = String(now.getFullYear());
+        const currentMonthNum = String(now.getMonth() + 1).padStart(2, '0');
+        const currentYearMonth = `${currentYear}-${currentMonthNum}`;
+
+        const goals = db.Goals.slice(1);
+        const cleanDate = (val) => String(val).replace(/'/g, "");
+
+        // 抽出：今年、今月、今週、その他
+        const yearGoals = goals.filter(g => cleanDate(g[5]) === currentYear && g[1] === "年間");
+        const monthGoals = goals.filter(g => cleanDate(g[5]) === currentYearMonth && g[1] === "月間");
+        const weeklyGoals = goals.filter(g => cleanDate(g[5]).startsWith(currentYearMonth) && g[1] === "週間");
+        const otherGoals = goals.filter(g => {
+            const d = cleanDate(g[5]);
+            return !((d === currentYear && g[1] === "年間") || (d === currentYearMonth && g[1] === "月間") || (d.startsWith(currentYearMonth) && g[1] === "週間"));
+        });
+
+        const statusSort = (a, b) => (a[4] === '完了' ? 1 : 0) - (b[4] === '完了' ? 1 : 0);
+
+        const renderCard = (g) => {
+            const relatedTasks = db.Tasks.filter(t => t[2] === g[0]);
+            const progress = calculateProgress(relatedTasks);
+            const isDone = g[4] === '完了';
+            
+            const card = document.createElement('div');
+            // 【重要】完了なら即座に done クラスを付与
+            card.className = `card ${isDone ? 'task-text-done' : ''}`;
+            card.id = 'goal-card-' + g[0];
+            card.style.display = "flex";
+            card.style.flexDirection = "column";
+
+            card.onclick = (e) => {
+                if (e.target.tagName !== 'BUTTON') showGoalDetail(g, relatedTasks);
+            };
+
+            let progressHtml = relatedTasks.length > 0 ? `
+                <div class="progress-container" style="margin-top:10px;"><div class="progress-bar" style="width:${progress}%"></div></div>
+                <div style="font-size:0.7rem; text-align:right; color:#888;">進捗: ${progress}%</div>` : "";
+
+            card.innerHTML = `
+                <div style="flex: 1;">
+                    <div style="font-size:0.75rem; color:#555; font-weight:bold;">
+                        <span style="color:var(--primary-color);">[${g[1]}]</span> ${cleanDate(g[5])}
+                    </div>
+                    <div style="font-weight:bold; font-size:1.05rem; margin-top:4px; color:#333;">${g[2]}</div>
+                    ${progressHtml}
+                </div>
+                <div style="text-align: right; margin-top: 10px;">
+                    <button onclick="event.stopPropagation(); updateGoalStatus('${g[0]}', '${isDone ? '進行中' : '完了'}')" 
+                            style="font-size:0.7rem; padding:6px 16px; border-radius:15px; border:none;
+                                background:${isDone ? '#ccc' : 'var(--primary-color)'}; 
+                                color:white; 
+                                cursor:pointer; font-weight:bold; transition: 0.2s;">
+                        ${isDone ? '再開' : '完了'}
+                    </button>
+                </div>`;
+            return card;
+        };
+
+        // セクションごとに描画
+        if(yearGoals.length > 0) {
+            container.insertAdjacentHTML('beforeend', `<h3 class="section-title">🌟 年間目標</h3>`);
+            yearGoals.sort(statusSort).forEach(g => container.appendChild(renderCard(g)));
+        }
+        if(monthGoals.length > 0) {
+            container.insertAdjacentHTML('beforeend', `<h3 class="section-title">📅 今月の目標</h3>`);
+            monthGoals.sort(statusSort).forEach(g => container.appendChild(renderCard(g)));
+        }
+        if(weeklyGoals.length > 0) {
+            container.insertAdjacentHTML('beforeend', `<h3 class="section-title">🏃 今週の目標</h3>`);
+            weeklyGoals.sort(statusSort).forEach(g => container.appendChild(renderCard(g)));
+        }
+        if(otherGoals.length > 0) {
+            const det = document.createElement('details');
+            det.style.marginTop = "30px";
+            det.innerHTML = `<summary style="color:#888; cursor:pointer; font-weight:bold; padding:10px; text-align:center; list-style:none;">▼ 過去・その他の目標を表示</summary>`;
+            otherGoals.sort(statusSort).forEach(g => det.appendChild(renderCard(g)));
+            container.appendChild(det);
+        }
+
+        const reviewSection = document.createElement('div');
+        reviewSection.style.cssText = "margin-top: 30px; border-top: 2px solid #eee; padding-top: 20px; padding-bottom: 50px;";
+        reviewSection.innerHTML = `
+            <button onclick="openReviewModal()" style="width:100%; padding:15px; background:var(--primary-color); color:white; border:none; border-radius:10px; font-weight:bold; cursor:pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                今月のレビューを作成する
+            </button>
+            
+            <details style="margin-top: 15px; background: white; border-radius: 8px; padding: 10px; border: 1px solid #eee;">
+                <summary style="font-weight: bold; cursor: pointer; color: var(--primary-color); outline: none;">過去のレビューを見る</summary>
+                <div id="review-links-list" style="margin-top: 10px; font-size: 0.9rem; display: flex; flex-direction: column; gap: 8px;">
+                    </div>
+            </details>
+        `;
+        container.appendChild(reviewSection);
+    }
+
+    // モーダルを開く（初期化）
+    function openReviewModal() {
+        const now = new Date();
+        const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        document.getElementById('review-modal').style.display = 'flex';
+        
+        const picker = document.getElementById('review-month-picker');
+        picker.value = currentMonth; // 今月をデフォルト値にする
+        updateReviewContent(currentMonth); // 最初の一回を実行
+    }
+
+    // 選択された月を元に中身を描画する（肝の部分！）
+    function updateReviewContent(selectedMonth) {
+        const modalBody = document.getElementById('review-modal-body');
+        if (!modalBody) return;
+
+        // 1. その月の目標を抽出
+        const monthGoals = db.Goals.slice(1).filter(g => g[5] && String(g[5]).includes(selectedMonth));
+
+        if (monthGoals.length === 0) {
+            modalBody.innerHTML = '<p style="text-align:center; color:#999; padding:20px;">' + selectedMonth + ' の目標が見つかりません。</p>';
+            return;
+        }
+
+        const allTasks = db.Tasks.slice(1);
+        let html = '<h4 style="font-size:0.9rem; margin-bottom:15px; color:#666; border-bottom:1px solid #eee; padding-bottom:5px;">目標の達成率を設定</h4>';
+
+        monthGoals.forEach((g, idx) => {
+            const goalId = String(g[0]).trim();
+            // 紐づけ成功した t[2] (Goal_ID列) を使用
+            const relatedTasks = allTasks.filter(t => String(t[2] || "").trim() === goalId);
+            const doneCount = relatedTasks.filter(t => String(t[5]).trim() === '完了').length;
+            const autoRate = relatedTasks.length > 0 ? Math.round((doneCount / relatedTasks.length) * 100) : 0;
+            const typeLabel = g[1] ? '[' + g[1] + '] ' : "";
+
+            html += '<div style="margin-bottom:15px; padding:15px; background:#fcfcfc; border:1px solid #efefef; border-radius:10px; border-left:5px solid ' + (g[1] === '月間' ? '#1a73e8' : '#34a853') + ';">';
+            html += '<div style="font-weight:bold; font-size:0.95rem; margin-bottom:8px; white-space:pre-wrap; word-break:break-all;">' + typeLabel + g[2] + '</div>';
+            html += '<div style="display:flex; align-items:center; gap:12px;">';
+            html += '<input type="range" class="goal-rate-slider" data-title="' + typeLabel + g[2] + '" data-reason="' + (g[3] || '') + '" value="' + autoRate + '" min="0" max="100" style="flex:1;" oninput="this.nextElementSibling.innerText = this.value + \'%\'">';
+            html += '<span style="font-weight:bold; color:var(--primary-color); width:45px; text-align:right;">' + autoRate + '%</span>';
+            html += '</div>';
+            html += '<div style="font-size:0.75rem; color:#999; margin-top:8px;">進捗: ' + doneCount + ' / ' + relatedTasks.length + ' 完了</div>';
+            html += '</div>';
+        });
+
+        // 2. 未完了タスクの抽出（期限：t[6] G列、ステータス：t[5] F列 を使用）
+        const incompleteTasks = allTasks.filter(t => {
+            if (!t[6]) return false; // 期限がないものはスキップ
+            const d = new Date(t[6]);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const taskMonth = y + '-' + m;
+            
+            return taskMonth === selectedMonth && String(t[5]).trim() === '未完了';
+        });
+
+        if (incompleteTasks.length > 0) {
+            html += '<h4 style="margin-top:25px; color:#ff4d4f; font-size:0.9rem; border-bottom:1px solid #fee; padding-bottom:5px;">未完了タスクの持ち越し確認</h4>';
+            html += '<p style="font-size:0.7rem; color:#888; margin-bottom:10px;">期限が今月で未完了のタスクがあります。翌月へ送りますか？</p>';
+            incompleteTasks.forEach((t) => {
+                html += '<div style="display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid #f9f9f9;">';
+                html += '<span style="font-size:0.8rem; flex:1; padding-right:15px; white-space:pre-wrap; word-break:break-all;">' + t[3] + '</span>';
+                html += '<div style="display:flex; gap:10px; white-space:nowrap;">';
+                html += '<label style="font-size:0.8rem; cursor:pointer;"><input type="radio" name="carry-' + t[0] + '" value="yes" checked> 送る</label>';
+                html += '<label style="font-size:0.8rem; cursor:pointer;"><input type="radio" name="carry-' + t[0] + '" value="no"> 消す</label>';
+                html += '</div></div>';
+            });
+        } else {
+            html += '<p style="font-size:0.8rem; color:#666; margin-top:20px;">✅ 今月の未完了タスクはありません。</p>';
+        }
+
+        modalBody.innerHTML = html;
+    }
+
+    // レポート送信部分も選択された月に合わせる
+    async function submitReview() {
+        const selectedMonth = document.getElementById('review-month-picker').value;
+        if (!selectedMonth) return alert("月を選択してください");
+        
+        if (!confirm(`${selectedMonth} 分のレポートを作成し、タスクを整理します。よろしいですか？`)) return;
+
+        const btn = document.getElementById('submit-review-btn');
+        btn.disabled = true;
+        btn.innerText = "送信中...";
+
+        try {
+            const goalData = [];
+            document.querySelectorAll('.goal-rate-slider').forEach(slider => {
+                goalData.push({
+                    title: slider.getAttribute('data-title'),
+                    reason: slider.getAttribute('data-reason'),
+                    rate: slider.value
+                });
+            });
+
+            const carryForwardTasks = [];
+            const allTasks = db.Tasks.slice(1);
+            
+            // 未完了タスクの持ち越し判定
+            allTasks.forEach(t => {
+                const radio = document.querySelector(`input[name="carry-${t[0]}"]:checked`);
+                if (radio && radio.value === 'yes') {
+                    carryForwardTasks.push({ id: t[0], parentId: t[1], category: t[2], name: t[3] });
+                }
+            });
+
+            // GASへの送信（no-corsモード）
+            await fetch(GAS_URL, {
+                method: "POST",
+                mode: "no-cors",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "createMonthlyReview",
+                    month: selectedMonth,
+                    goals: goalData,
+                    carryForwardTasks: carryForwardTasks,
+                    deleteTargetMonth: selectedMonth + "-01"
+                })
+            });
+
+            // 【修正ポイント】resultの判定を消し、送信完了＝成功として扱う
+            alert("送信を完了しました！\n数秒後にGoogleドキュメントが作成され、スプレッドシートが更新されます。");
+            location.reload(); 
+
+        } catch (e) {
+            console.error("エラー詳細:", e);
+            alert("送信中にエラーが発生しました。コンソールを確認してください。");
+            btn.disabled = false;
+            btn.innerText = "レポート作成・削除";
+        }
+    }
+
+    // ステータス更新用の関数も忘れずに追加してください
+    async function updateGoalStatus(id, newStatus) {
+        const card = document.getElementById('goal-card-' + id);
+        if (card) card.style.opacity = "0.5";
+
+        try {
+            await fetch(GAS_URL, {
+                method: "POST",
+                body: JSON.stringify({ action: "updateStatus", sheetName: "Goals", id: id, status: newStatus })
+            });
+            const g = db.Goals.find(x => x[0] === id);
+            if (g) g[4] = newStatus;
+            renderGoals();
+        } catch (e) {
+            console.error(e);
+            refreshData();
+        }
+    }
+
+    function showGoalDetail(g, tasks) {
+        const overlay = document.getElementById('detail-overlay');
+        const titleEl = document.getElementById('detail-title');
+        const bodyEl = document.getElementById('detail-dynamic-body');
+
+        overlay.style.display = 'flex';
+        titleEl.innerText = g[2]; // 目標のタイトル
+        titleEl.style.whiteSpace = "pre-wrap";   // 改行を維持
+        titleEl.style.wordBreak = "break-all";    // 枠の端で強制改行
+        titleEl.style.lineHeight = "1.4";         // 行間を少し広げて読みやすく
+
+        // タスクリストのHTML組み立て
+        const taskListHtml = tasks.map(t => {
+            const isDone = t[5] === '完了';
+            return `
+                <div class="task-row" style="display:flex; align-items:center; padding:12px 5px; border-bottom:1px solid #eee; cursor:pointer;" onclick="jumpToTask('${t[0]}')">
+                    <span style="font-size:1.2rem; margin-right:12px; color:${isDone ? 'var(--primary-color)' : '#ccc'}">${isDone ? '☑' : '☐'}</span>
+                    <span style="${isDone ? 'text-decoration:line-through; color:#999;' : 'color:#333;'} font-size:0.95rem;">${t[3]}</span>
+                </div>
+            `;
+        }).join('');
+
+        // 中身のセット：ボタンを一番下に配置
+        bodyEl.innerHTML = `
+            <div style="font-size:0.9rem; color:#555; padding:15px; background:#f8fafc; border-radius:10px; border:1px solid #e2e8f0; margin-bottom:20px; line-height:1.5;">
+                <strong style="color:var(--primary-color); display:block; margin-bottom:5px; font-size:0.75rem; text-transform:uppercase;">理由</strong>
+                <div style="font-size:0.85rem; color:#666; white-space:pre-wrap; word-break:break-all;">${g[3]}</div>
+            </div>
+
+            <h4 style="margin:20px 0 10px; color:var(--primary-color); border-bottom: 2px solid #e3f2fd; display:inline-block; padding-bottom:3px; font-size:0.9rem;">
+                紐づくタスク一覧
+            </h4>
+            <div id="goal-tasks-list" style="margin-bottom:30px;">
+                ${taskListHtml || "<p style='font-size:0.9rem; color:#999; padding:20px 0; text-align:center;'>紐づくタスクはありません</p>"}
+            </div>
+
+            <div style="border-top: 1px solid #eee; pt:20px;">
+                <button onclick="deleteItem(event, 'Goals', '${g[0]}'); document.getElementById('detail-overlay').style.display='none';" 
+                        style="width:100%; padding:12px; background:#fff; border:1px solid #ff4d4f; color:#ff4d4f; border-radius:8px; font-weight:bold; cursor:pointer; font-size:0.85rem; transition: background 0.2s;">
+                    この目標を削除する
+                </button>
+            </div>
+        `;
+    }
+
+    function jumpToTask(id) {
+        // 1. 詳細モーダルを閉じる
+        document.getElementById('detail-overlay').style.display = 'none';
+
+        // 2. タスクタブのセレクトボックスを先に「目標別(goal)」に書き換える
+        const sortSelect = document.getElementById('task-sort-mode');
+        if (sortSelect) {
+            sortSelect.value = 'goal';
+        }
+
+        // 3. タブを切り替える
+        // ※showPage('tasks') の中で renderTasks() が呼ばれるので、
+        // すでに上の手順2で書き換えた 'goal' モードで描画されます
+        showPage('tasks');
+
+        // 4. 要素が生成されるのを待ってからスクロール
+        setTimeout(() => {
+            const el = document.getElementById('task-card-' + id) || document.getElementById('subtask-' + id);
+            if(el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.classList.add('highlight');
+                setTimeout(() => el.classList.remove('highlight'), 2000);
+            } else {
+                console.log("Task not found: " + id);
+            }
+        }, 400); 
+    }
+
+    function renderTasks() {
+        const container = document.getElementById('list-tasks');
+        const sortMode = document.getElementById('task-sort-mode').value;
+        const searchText = document.getElementById('task-search').value.toLowerCase();
+        const onlyIncomplete = document.getElementById('task-filter-incomplete').checked;
+        if (!container) return;
+        container.innerHTML = "";
+
+        // 東京時間の今日の日付
+        const today = new Date().toLocaleString("sv-SE", {timeZone: "Asia/Tokyo"}).split(' ')[0];
+        const priorityMap = { "高": 1, "中": 2, "低": 3 };
+
+        // 1. フィルタ処理 (t[3]がタスク名)
+        let allTasks = db.Tasks.slice(1).filter(t => {
+            const taskName = String(t[3] || ""); // ここで強制的に文字列化
+            return taskName.toLowerCase().includes(searchText);
+        });
+        if (onlyIncomplete) {
+            allTasks = allTasks.filter(t => t[5] !== '完了'); // t[5]がStatus
+        }
+
+        // 2. ソート処理 (t[6]がDate, t[4]がPriority)
+        allTasks.sort((a, b) => {
+            const dateA = (String(a[6] || "9999-12-31")).replace(/'/g, "");
+            const dateB = (String(b[6] || "9999-12-31")).replace(/'/g, "");
+            if (dateA !== dateB) return dateA.localeCompare(dateB);
+            return (priorityMap[a[4]] || 4) - (priorityMap[b[4]] || 4);
+        });
+
+        // 3. 表示対象（親タスクのみか全件か / t[1]がParent_ID）
+        let displayTasks = (sortMode === 'parent') ? allTasks.filter(t => !t[1] || t[1] === "") : allTasks;
+
+        // 4. グループ化
+        let groups = {};
+        displayTasks.forEach(t => {
+            let label = "期限なし";
+            if (sortMode === 'date') {
+                const date = t[6] ? String(t[6]).replace(/'/g, "") : "期限なし";
+                if (date !== "期限なし" && date < today && t[5] !== '完了') {
+                    label = "⚠️ 期限切れ";
+                } else if (date === today) {
+                    label = "📌 今日のタスク";
+                } else {
+                    label = date; 
+                }
+            } else if (sortMode === 'priority') {
+                label = t[4] || "なし";
+            } else if (sortMode === 'goal') {
+                // t[2]がGoal_ID
+                const goal = db.Goals.find(g => String(g[0]) === String(t[2]));
+                label = goal ? "目標: " + goal[2] : "未紐付け";
+            } else {
+                label = ""; 
+            }
+
+            if (!groups[label]) groups[label] = [];
+            groups[label].push(t);
+        });
+
+        // 5. グループ描画
+        const sortedKeys = Object.keys(groups).sort((a, b) => {
+            if (sortMode === 'date') {
+                if (a === "⚠️ 期限切れ") return -1;
+                if (b === "⚠️ 期限切れ") return 1;
+                if (a === "📌 今日のタスク") return -1;
+                if (b === "📌 今日のタスク") return 1;
+                if (a === "期限なし") return 1;
+                return a.localeCompare(b);
+            }
+            return a.localeCompare(b);
+        });
+
+        sortedKeys.forEach(key => {
+            if (key !== "") {
+                const header = document.createElement('h3');
+                header.style.cssText = "font-size:0.9rem; margin:20px 0 10px 5px; color:#666; border-left:4px solid #ccc; padding-left:10px;";
+                header.innerText = key;
+                container.appendChild(header);
+            }
+
+            groups[key].forEach(t => {
+                const isDone = t[5] === '完了';
+                const card = document.createElement('div');
+                card.className = "card " + (isDone ? 'task-text-done' : '');
+                card.id = 'task-card-' + t[0];
+                
+                // t[4]優先度, t[6]期限, t[3]タスク名
+                let html = `
+                    <div style="font-size:0.7rem; display:flex; justify-content:space-between; margin-bottom:5px;">
+                        <span>優先度: ${t[4] || '-'} 期限: ${(t[6] || '').replace(/'/g, "") || 'なし'}</span>
+                        <span onclick="deleteItem(event, 'Tasks', '${t[0]}')" style="color:#ccc; cursor:pointer;">✕ 削除</span>
+                    </div>
+                    <div class="task-row" style="display:flex; align-items:center; gap:10px;">
+                        <input type="checkbox" ${isDone ? 'checked' : ''} onchange="toggleStatus('${t[0]}', this.checked)">
+                        <span style="font-weight:bold; white-space:pre-wrap; word-break:break-all; ${isDone ? 'text-decoration:line-through;' : ''}">${t[3]}</span>
+                    </div>`;
+                
+                // 子タスク表示
+                if (sortMode === 'parent') {
+                    const childTasks = db.Tasks.filter(ct => String(ct[1]) === String(t[0]));
+                    if (childTasks.length > 0) {
+                        const doneSub = childTasks.filter(ct => ct[5] === '完了').length;
+                        const prog = Math.round((doneSub / childTasks.length) * 100);
+                        html += `<div style="height:4px; background:#eee; border-radius:2px; margin:8px 0;"><div style="width:${prog}%; height:100%; background:var(--primary-color); border-radius:2px;"></div></div>`;
+                        
+                        childTasks.forEach(ct => {
+                            const isCtDone = ct[5] === '完了';
+                            html += `
+                                <div class="task-row" style="margin-left:20px; border:none; font-size:0.85rem; display:flex; align-items:center; gap:8px;">
+                                    <input type="checkbox" ${isCtDone ? 'checked' : ''} onchange="toggleStatus('${ct[0]}', this.checked)">
+                                    <span style="white-space:pre-wrap; word-break:break-all; ${isCtDone ? 'text-decoration:line-through; color:#ccc;' : ''}">${ct[3]}</span>
+                                </div>`;
+                        });
+                    }
+                }
+                card.innerHTML = html;
+                container.appendChild(card);
+            });
+        });
+    }
+
+    let currentLogCategory = 'すべて';
+
+    function switchLogTab(cat, el) {
+        currentLogCategory = cat;
+        document.querySelectorAll('.log-tab-item').forEach(i => {
+            i.classList.remove('active');
+            i.style.background = 'transparent';
+            i.style.color = '#888';
+        });
+        el.classList.add('active');
+        el.style.background = '#fff';
+        el.style.color = 'var(--primary-color)';
+        renderLogs();
+    }
+
+    let isRootOnlyMode = false; // 親記録のみ表示するかのフラグ
+
+    function toggleRootFilter() {
+        isRootOnlyMode = !isRootOnlyMode;
+        const btn = document.getElementById('root-filter-btn');
+        const icon = document.getElementById('root-filter-icon');
+        
+        if (isRootOnlyMode) {
+            btn.style.background = "var(--primary-color)";
+            btn.style.color = "white";
+            btn.style.borderColor = "var(--primary-color)";
+            icon.innerText = "🎯";
+        } else {
+            btn.style.background = "#f0f2f5";
+            btn.style.color = "#333";
+            btn.style.borderColor = "#ddd";
+            icon.innerText = "🔘";
+        }
+        renderLogs();
+    }
+    
+    function renderLogs(forcedSearchWord) {
+        const container = document.getElementById('list-logs');
+        if (!container) return;
+        container.innerHTML = "";
+        
+        const allLogs = db.Logs.slice(1);
+        
+        // --- 【修正：検索ワードの取得】 ---
+        let searchWord = (forcedSearchWord !== undefined) 
+            ? forcedSearchWord 
+            : (document.getElementById('search-input')?.value || "");
+        searchWord = searchWord.toLowerCase().trim();
+        
+        const seenTitles = new Set();
+        
+        // --- 【修正：フィルタリングロジック】 ---
+        let displayLogs = allLogs.filter(l => {
+            const title = l[5] ? String(l[5]).trim() : "";
+            const content = l[3] ? String(l[3]).trim() : "";
+            const english = l[4] ? String(l[4]).trim() : "";
+            const category = l[1];
+            const parentId = l[6] ? String(l[6]).trim() : "";
+
+            // A. カテゴリ絞り込み
+            const matchCat = (currentLogCategory === 'すべて' || category === currentLogCategory);
+            if (!matchCat) return false;
+
+            // B. 検索ワード判定（題名・本文・英語日記を対象）
+            const matchSearch = searchWord === "" || 
+                                title.toLowerCase().includes(searchWord) || 
+                                content.toLowerCase().includes(searchWord) || 
+                                english.toLowerCase().includes(searchWord);
+            if (!matchSearch) return false;
+
+            // C. 【追加】親記録のみ絞り込み（ボタンがONの時、Parent_IDがあるものを除外）
+            // ※isRootOnlyMode 変数が定義されている前提
+            if (typeof isRootOnlyMode !== 'undefined' && isRootOnlyMode && parentId !== "" && parentId !== "なし") {
+                return false;
+            }
+
+            // D. タイトル重複排除
+            if (title === "") return true;
+            if (seenTitles.has(title)) {
+                return false;
+            } else {
+                seenTitles.add(title);
+                return true;
+            }
+        });
+
+        // ソート
+        displayLogs.sort((a, b) => new Date(b[0]) - new Date(a[0]));
+
+        // 2. カードの生成（バッジ機能、返信数カウントも削らず維持）
+        displayLogs.forEach(l => {
+            const currentId = String(l[2]).trim();
+            const currentTitle = String(l[5] || "").trim();
+            const parentId = String(l[6] || "").trim();
+
+            let connectionBadge = "";
+            if (parentId && parentId !== "" && parentId !== "なし") {
+                const parentLog = allLogs.find(pl => String(pl[2]).trim() === parentId);
+                if (parentLog && String(parentLog[5]).trim() !== currentTitle) {
+                    connectionBadge = `<span style="background:#fff1f0; color:#cf1322; border:1px solid #ffa39e; padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-right:5px;">🔗 関連あり</span>`;
+                }
+            } else {
+                const hasLinkedChild = allLogs.some(cl => String(cl[6]).trim() === currentId && String(cl[5]).trim() !== currentTitle);
+                if (hasLinkedChild) {
+                    connectionBadge = `<span style="background:#f6ffed; color:#389e0d; border:1px solid #b7eb8f; padding:2px 6px; border-radius:4px; font-size:0.65rem; margin-right:5px;">🔗 親トピック</span>`;
+                }
+            }
+
+            let replyCount = 0;
+            if (currentTitle !== "") {
+                replyCount = allLogs.filter(cl => {
+                    const isSelf = String(cl[2]).trim() === currentId;
+                    const hasSameTitle = cl[5] && String(cl[5]).trim() === currentTitle;
+                    return !isSelf && hasSameTitle;
+                }).length;
+            } else {
+                replyCount = allLogs.filter(cl => String(cl[6]).trim() === currentId).length;
+            }
+
+            const mainText = (l[4] && String(l[4]).trim() !== "") ? l[4] : l[3];
+
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <div onclick="showLogDetail('${l[2]}')">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:5px;">
+                        <span style="font-size:0.75rem; color:var(--primary-color); font-weight:bold;">${formatDate(l[0])} [${l[1]}]</span>
+                        <div style="display:flex; align-items:center;">
+                            ${connectionBadge}
+                            <span onclick="event.stopPropagation(); deleteItem(event, 'Daily_Logs', '${l[2]}')" style="color:#ccc; cursor:pointer; font-size:0.8rem; padding: 0 5px;">✕</span>
+                        </div>
+                    </div>
+                    <div style="font-weight:bold; margin-bottom:5px; color:#333;">${l[5] || '無題の記録'}</div>
+                    <div style="display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size:0.95rem; color:#666; line-height:1.5;">
+                        ${mainText}
+                    </div>
+                    ${replyCount > 0 ? `<div style="text-align:right; margin-top:8px; font-size:0.75rem; color:var(--primary-color); font-weight:bold; border-top: 1px dashed #eee; padding-top: 5px;">💬 ${replyCount}件の返信</div>` : ''}
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    function showLogDetail(id) {
+        const allLogs = db.Logs.slice(1);
+        const log = allLogs.find(l => String(l[2]) === String(id));
+        if (!log) return;
+
+        const overlay = document.getElementById('detail-overlay');
+        const titleEl = document.getElementById('detail-title');
+        const bodyEl = document.getElementById('detail-dynamic-body');
+        
+        const currentTitle = log[5] ? String(log[5]).trim() : "";
+        const parentId = log[6] ? String(log[6]).trim() : ""; // G列：Parent_ID
+
+        overlay.style.display = 'flex';
+        titleEl.innerText = currentTitle || "無題の記録"; 
+
+        // --- 1. 双方向リンクボタンの生成（ここが削られていました！） ---
+        let jumpLinkHtml = "";
+        
+        // A. 自分が「子」の場合（Parent_IDがある）、親へのリンクを表示
+        if (parentId && parentId !== "" && parentId !== "なし") {
+            const parentLog = allLogs.find(pl => String(pl[2]).trim() === parentId);
+            // タイトルが一致しない場合のみリンクを表示（一致する場合はスレッドに表示されるため）
+            if (parentLog && String(parentLog[5]).trim() !== currentTitle) {
+                jumpLinkHtml = `
+                    <div onclick="showLogDetail('${parentId}')" style="margin-bottom:15px; padding:10px; background:#fff1f0; border:1px solid #ffa39e; border-radius:8px; color:#cf1322; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
+                        <span>🔗</span> 親トピックへ移動: <strong>${parentLog[5] || "無題"}</strong>
+                    </div>
+                `;
+            }
+        } 
+        // B. 自分が「親」で、タイトルが一致しない「子」が他にいる場合（IDで紐づいている場合）
+        else {
+            const linkedChild = allLogs.find(cl => String(cl[6]).trim() === String(id).trim() && String(cl[5]).trim() !== currentTitle);
+            if (linkedChild) {
+                jumpLinkHtml = `
+                    <div onclick="showLogDetail('${linkedChild[2]}')" style="margin-bottom:15px; padding:10px; background:#f6ffed; border:1px solid #b7eb8f; border-radius:8px; color:#389e0d; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
+                        <span>🔗</span> 関連する子記録へ移動: <strong>${linkedChild[5] || '無題'}</strong>
+                    </div>
+                `;
+            }
+        }
+
+        // --- 2. 英語日記セクションの生成 ---
+        let englishDiaryHtml = "";
+        if (log[4] && String(log[4]).trim() !== "") {
+            englishDiaryHtml = `
+                <div style="margin-top:-10px; margin-bottom:20px; padding:15px; background:#f0f7ff; border-radius:10px; border:1px solid #d0e3ff; color:#2c3e50;">
+                    <div style="font-size:0.75rem; font-weight:bold; color:#1a73e8; margin-bottom:5px; display:flex; align-items:center; gap:5px;">
+                        <span>🇺🇸</span> English Diary
+                    </div>
+                    <div style="font-size:0.95rem; line-height:1.6; white-space:pre-wrap; font-family: 'Georgia', serif;">${log[4]}</div>
+                </div>
+            `;
+        }
+
+        // --- 3. スレッド表示用の抽出（タイトル一致） ---
+        const children = allLogs.filter(cl => {
+            const isSelf = String(cl[2]).trim() === String(id).trim();
+            const hasSameTitle = currentTitle !== "" && cl[5] && String(cl[5]).trim() === currentTitle;
+            return !isSelf && hasSameTitle;
+        });
+        
+        let childrenHtml = children.map(cl => `
+            <div id="log-child-${cl[2]}" style="background:#f4f4f4; margin-top:10px; padding:12px; border-radius:8px; border-left:4px solid #ccc; margin-left:15px;">
+                <div style="display:flex; justify-content:space-between; font-size:0.7rem; color:#999; margin-bottom:5px;">
+                    <span>└ ${formatDate(cl[0])}</span>
+                    <span onclick="deleteItem(event, 'Daily_Logs', '${cl[2]}')" style="color:#ff4d4f; cursor:pointer;">削除</span>
+                </div>
+                <div style="font-size:0.9rem; white-space:pre-wrap;">${cl[3]}</div>
+            </div>
+        `).join('');
+
+        // --- 4. HTML組み立て ---
+        bodyEl.innerHTML = `
+            ${jumpLinkHtml}
+            <div style="font-size:0.8rem; color:#888; margin-bottom:10px;">${formatDate(log[0])} [${log[1]}]</div>
+            
+            <div style="font-size:1rem; line-height:1.6; white-space:pre-wrap; margin-bottom:20px; padding:15px; background:#fdfdfd; border-radius:10px; border:1px solid #eee; color:#333;">${log[3]}</div>
+            
+            ${englishDiaryHtml}
+            
+            <div style="display:flex; gap:10px; margin-bottom:20px;">
+                <button onclick="copyThreadForGemini('${log[2]}')" style="flex:1; padding:12px; background:#1a73e8; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; font-size:0.85rem; display:flex; align-items:center; justify-content:center; gap:5px;">
+                    <span>✨</span> Geminiに送る
+                </button>
+                <button onclick="replyToLog('${log[2]}', '${log[5]}', '${log[1]}')" style="flex:1; padding:12px; background:var(--primary-color); color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; font-size:0.85rem;">
+                    💬 返信する
+                </button>
+            </div>
+            
+            <div style="font-weight:bold; font-size:0.9rem; color:var(--primary-color); border-top:1px solid #eee; padding-top:15px;">💬 スレッド形式の履歴 (${children.length})</div>
+            <div id="log-thread-area">${childrenHtml || "<p style='color:#ccc; font-size:0.8rem; text-align:center; padding:20px;'>返信はありません</p>"}</div>
+        `;
+    }
+    
+    function replyToLog(parentId, parentTitle, category) {
+        document.getElementById('detail-overlay').style.display = 'none';
+        currentPage = 'logs';
+        openForm();
+        
+        // フォームに親の情報を自動入力
+        document.getElementById('f1').value = category; 
+        document.getElementById('f_log_title').value = parentTitle; 
+        document.getElementById('f_log_parent').value = parentId; 
+        
+        document.getElementById('f2').placeholder = "スレッドへの返信を入力...";
+        document.getElementById('f2').focus();
+    }
+
+    function replyToLog(parentId, parentTitle, category) {
+        // 詳細ポップアップを閉じる
+        document.getElementById('detail-overlay').style.display = 'none';
+        
+        // フォームを開く
+        currentPage = 'logs';
+        openForm();
+        
+        // フォームの内容を返信用に書き換える
+        document.getElementById('f1').value = category; // カテゴリを親に合わせる
+        document.getElementById('f_log_title').value = parentTitle; // 題名を親に合わせる
+        document.getElementById('f_log_parent').value = parentId; // 親IDをセット
+        
+        // タイトルを分かりやすく変更
+        document.getElementById('form-title').innerText = `「${parentTitle}」へ返信`;
+    }
+
+    function deleteChildLog(event, id) {
+        event.stopPropagation();
+        if (!confirm("この記録を削除しますか？")) return;
+
+        const row = document.getElementById('child-row-' + id);
+        if (row) row.style.opacity = "0.3";
+
+        fetch(GAS_URL, {
+            method: "POST",
+            body: JSON.stringify({ action: "delete", sheetName: "Daily_Logs", id: id })
+        }).then(() => {
+            const idx = db.Logs.findIndex(l => l[2] === id);
+            if (idx !== -1) db.Logs.splice(idx, 1);
+            if (row) row.remove(); // その行だけを消す
+        });
+    }
+
+    function toggleChildren(id) {
+        const area = document.getElementById('child-area-' + id);
+        area.style.display = area.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function openForm() {
+        const content = document.getElementById('form-content');
+        document.getElementById('form-overlay').style.display = 'flex';
+        document.getElementById('form-title').innerText = currentPage === 'goals' ? '目標の追加' : (currentPage === 'tasks' ? 'タスクの追加' : '記録の追加');
+
+        if (currentPage === 'goals') {
+            content.innerHTML = `
+                <label>タイプ</label>
+                <select id="f1" onchange="updateGoalDateInput(this.value)">
+                    <option value="年間">年間</option>
+                    <option value="月間" selected>月間</option>
+                    <option value="週間">週間</option>
+                </select>
+                <label>期限日/対象</label>
+                <div id="goal-date-container"><input type="month" id="f_date"></div>
+                <label>目標名</label><input type="text" id="f2">
+                <label>詳細/理由</label><textarea id="f3" rows="3"></textarea>`;
+        } else if (currentPage === 'tasks') {
+            let gOpts = db.Goals.slice(1).map(g => `<option value="${g[0]}">${g[2]}</option>`).join('');
+            let pOpts = db.Tasks.slice(1).filter(t => !t[1]).map(t => `<option value="${t[0]}">${t[3]}</option>`).join('');
+            content.innerHTML = `<label>タスク名</label><input type="text" id="f1"><label>期限日</label><input type="date" id="f_task_date"><label>優先度</label><select id="f_pri"><option>高</option><option selected>中</option><option>低</option></select><label>目標</label><select id="f2"><option value="">なし</option>${gOpts}</select><label>親タスク</label><select id="f3"><option value="">なし</option>${pOpts}</select>`;
+        } else if (currentPage === 'logs') {
+            // 全ログから「重複しないタイトル」のリストを作成
+            const uniqueTitles = new Set();
+            const parentOpts = db.Logs.slice(1)
+                .filter(l => {
+                    const title = l[5]; // F列: 題名
+                    if (!title || String(title).trim() === "") return false;
+                    
+                    // すでに同じタイトルがSetにある場合は除外（＝最初に見つかったものだけ採用）
+                    if (uniqueTitles.has(title)) {
+                        return false;
+                    } else {
+                        uniqueTitles.add(title);
+                        return true;
+                    }
+                })
+                .map(l => `<option value="${l[2]}">${l[5]}</option>`) // l[2]はID
+                .join('');
+
+            content.innerHTML = `
+                <label>カテゴリー</label>
+                <select id="f1" onchange="document.getElementById('eng-field').style.display=this.value==='英語日記'?'block':'none'">
+                    <option>思考の壁打ち</option><option>読書記録</option><option>英語日記</option>
+                </select>
+                <label>題名（新規スレッド用）</label>
+                <input type="text" id="f_log_title" placeholder="新しいトピック名">
+                <label>既存のトピックに紐づける（任意）</label>
+                <select id="f_log_parent"><option value="">新規作成</option>${parentOpts}</select>
+                <label>内容</label>
+                <textarea id="f2" rows="4"></textarea>
+                <div id="eng-field" style="display:none;"><label>English Diary</label><textarea id="f3" rows="4"></textarea></div>
+            `;
+        }
+    }
+
+    // 週間が選ばれた時に ID="f_date_m" と "f_date_w" を作る
+    function updateGoalDateInput(type) {
+        const container = document.getElementById('goal-date-container');
+        if (type === '年間') {
+            container.innerHTML = '<input type="number" id="f_date" value="2026" min="2025" max="2100" style="width:100%; padding:10px; box-sizing:border-box;">';
+        } else if (type === '週間') {
+            container.innerHTML = `
+                <div style="display:flex; gap:5px;">
+                    <input type="month" id="f_date_m" style="flex:2; padding:10px; box-sizing:border-box;">
+                    <select id="f_date_w" style="flex:1; padding:10px; box-sizing:border-box;">
+                        <option value="1">1週目</option><option value="2">2週目</option>
+                        <option value="3">3週目</option><option value="4">4週目</option><option value="5">5週目</option>
+                    </select>
+                </div>`;
+        } else {
+            container.innerHTML = '<input type="month" id="f_date" style="width:100%; padding:10px; box-sizing:border-box;">';
+        }
+    }
+
+    // 週間目標が選ばれた時に「週」を選べるようにする
+    function updateGoalDateInput(type) {
+        const container = document.getElementById('goal-date-container');
+        if (type === '年間') {
+            container.innerHTML = '<input type="number" id="f_date" value="2026" min="2025" max="2100">';
+        } else if (type === '週間') {
+            container.innerHTML = `
+                <div style="display:flex; gap:5px;">
+                    <input type="month" id="f_date_m" style="flex:2;">
+                    <select id="f_date_w" style="flex:1;">
+                        <option value="1">1週目</option><option value="2">2週目</option>
+                        <option value="3">3週目</option><option value="4">4週目</option><option value="5">5週目</option>
+                    </select>
+                </div>`;
+        } else {
+            container.innerHTML = '<input type="month" id="f_date">';
+        }
+    }
+
+    // 目標のタイプに合わせて入力欄を変える補助関数
+    function updateGoalDateInput(type) {
+        const container = document.getElementById('goal-date-container');
+        if (type === '年間') {
+            container.innerHTML = '<input type="number" id="f_date" value="2026" min="2025" max="2100" style="width:100%; padding:10px;">';
+        } else if (type === '週間') {
+            // 月と週を分けて入力
+            container.innerHTML = `
+                <div style="display:flex; gap:5px;">
+                    <input type="month" id="f_date_m" style="flex:2; padding:10px;">
+                    <select id="f_date_w" style="flex:1; padding:10px;">
+                        <option value="1週目">1週目</option><option value="2週目">2週目</option>
+                        <option value="3週目">3週目</option><option value="4週目">4週目</option><option value="5週目">5週目</option>
+                    </select>
+                </div>`;
+        } else {
+            container.innerHTML = '<input type="month" id="f_date" style="width:100%; padding:10px;">';
+        }
+    }
+
+    // ステータス更新用
+    async function updateGoalStatus(id, newStatus) {
+        const card = document.getElementById('goal-card-' + id);
+        if (card) card.style.opacity = "0.5";
+
+        // ローカルデータの即時反映
+        const goal = db.Goals.find(x => x[0] === id);
+        if (goal) {
+            goal[4] = newStatus; 
+            renderGoals(); // 完了なら即座にグレーにして下に移動
+        }
+
+        try {
+            await fetch(GAS_URL, {
+                method: "POST",
+                body: JSON.stringify({ 
+                    action: "updateStatus", 
+                    sheetName: "Goals", 
+                    id: id, 
+                    status: newStatus 
+                })
+            });
+            // 通信後、一応最新状態をマージするためにリフレッシュ
+            refreshData();
+        } catch (e) {
+            console.error("更新失敗:", e);
+            alert("保存に失敗しました。");
+            refreshData();
+        }
+    }
+
+    async function submitForm() {
+        const sheetName = currentPage === 'goals' ? 'Goals' : (currentPage === 'tasks' ? 'Tasks' : 'Daily_Logs');
+        let data = [];
+        const today = new Date().toLocaleString("sv-SE", {timeZone: "Asia/Tokyo"}).split(' ')[0];
+        const tempId = (sheetName === 'Goals' ? 'G-' : sheetName === 'Tasks' ? 'T-' : 'L-') + Date.now();
+
+        try {
+            // 1. 各カテゴリの入力値取得とデータ整形
+            if (currentPage === 'goals') {
+                const type = document.getElementById('f1').value;
+                const title = document.getElementById('f2').value;
+                if (!title) throw new Error("タイトルを入力してください");
+                const targetMonth = (type === '週間') ? (document.getElementById('f_date_m').value + "-" + document.getElementById('f_date_w').value) : (document.getElementById('f_date')?.value || "");
+                data = [tempId, type, title, document.getElementById('f3').value, "進行中", "'" + targetMonth];
+
+            } else if (currentPage === 'tasks') {
+                const name = document.getElementById('f1').value;
+                if (!name) throw new Error("タスク名を入力してください");
+                data = [tempId, document.getElementById('f3').value || "", document.getElementById('f2').value || "", name, document.getElementById('f_pri').value, "未完了", "'" + document.getElementById('f_task_date').value];
+
+            } else if (currentPage === 'logs') {
+                const content = document.getElementById('f2').value;
+                if (!content) throw new Error("本文を入力してください");
+                data = [today, document.getElementById('f1').value, tempId, content, document.getElementById('f3').value || "", document.getElementById('f_log_title').value || "無題", document.getElementById('f_log_parent').value || ""];
+            }
+
+            // --- ここからが「即時反映」のキモ ---
+            
+            // 2. ローカルのデータベース(db)に先に突っ込む
+            const dbKey = (sheetName === 'Daily_Logs' ? 'Logs' : sheetName);
+            db[dbKey].push(data);
+
+            // 3. フォームを即座に閉じて、カードを再描画する
+            document.getElementById('form-overlay').style.display = 'none';
+            if (currentPage === 'goals') renderGoals();
+            else if (currentPage === 'tasks') renderTasks();
+            else renderLogs();
+
+            // 4. 【裏で処理】GASにこっそり送信する
+            fetch(GAS_URL, {
+                method: "POST",
+                mode: "no-cors",
+                body: JSON.stringify({ action: "saveRecord", sheetName: sheetName, data: data })
+            }).then(() => {
+                console.log("Backend sync complete.");
+                // サーバーと完全に同期させるため、しばらくしてリフレッシュ（任意）
+                // refreshData(); 
+            }).catch(err => {
+                console.error("Backend sync failed:", err);
+                alert("通信エラーによりスプレッドシートへの保存に失敗した可能性があります。");
+            });
+
+        } catch (err) {
+            alert(err.message);
+        }
+    }
+
+    async function deleteItem(event, sheetName, id) {
+        if (event && event.stopPropagation) event.stopPropagation();
+        if (!confirm("本当に削除してもよろしいですか？")) return;
+
+        // --- 1. ローカルデータ(db)から即座に削除 ---
+        const dbKey = (sheetName === 'Daily_Logs' || sheetName === 'Logs') ? 'Logs' : sheetName;
+        let parentIdToUpdate = null;
+
+        if (db[dbKey]) {
+            // 削除対象が子記録の場合、その親IDを特定しておく（返信数更新のため）
+            const targetItem = db[dbKey].find(item => String(item[2]) === String(id));
+            if (targetItem && targetItem[6]) {
+                parentIdToUpdate = targetItem[6]; // Parent_IDを取得
+            }
+
+            // フィルタリングして削除
+            db[dbKey] = db[dbKey].filter(item => String(item[2]) !== String(id) && String(item[0]) !== String(id));
+        }
+
+        // --- 2. 画面上の要素をアニメーションで消す ---
+        const targetCard = (event && event.target) ? event.target.closest('.card') || event.target.closest('[id^="log-child-"]') : null;
+        if (targetCard) {
+            targetCard.style.transition = "opacity 0.2s";
+            targetCard.style.opacity = "0";
+            setTimeout(() => targetCard.style.display = "none", 200);
+        }
+
+        // --- 3. UIの再描画（ここが重要です） ---
+        if (sheetName === 'Daily_Logs' || sheetName === 'Logs') {
+            // 詳細画面を開いている場合、中身を再描画して子記録リストを更新
+            const detailOverlay = document.getElementById('log-detail-overlay');
+            if (detailOverlay && detailOverlay.style.display === 'flex') {
+                const currentId = document.getElementById('log-detail-parent-id')?.value;
+                if (currentId) {
+                    // 詳細画面内のリストを最新の db.Logs に基づいて作り直す
+                    showLogDetail(currentId); 
+                }
+            }
+            // 一覧画面の「〇件の返信」という文字を更新するために再描画
+            renderLogs();
+        } else if (sheetName === 'Goals') {
+            renderGoals();
+        } else {
+            renderTasks();
+        }
+
+        // --- 4. GASへ送信（裏側で実行） ---
+        fetch(GAS_URL, {
+            method: "POST",
+            mode: "no-cors",
+            body: JSON.stringify({ 
+                action: "delete", 
+                sheetName: (sheetName === 'Logs' ? 'Daily_Logs' : sheetName), 
+                id: id 
+            })
+        });
+    }
+
+    async function toggleStatus(id, isChecked) {
+        const newStatus = isChecked ? '完了' : '未完了';
+        
+        // 1. 【爆速化】画面上の見た目を即座に変える
+        const targetEl = document.getElementById('task-card-' + id) || document.getElementById('subtask-' + id);
+        if (targetEl) {
+            if (isChecked) targetEl.classList.add('task-text-done');
+            else targetEl.classList.remove('task-text-done');
+            if (targetEl.id.startsWith('subtask-')) {
+                targetEl.style.textDecoration = isChecked ? 'line-through' : 'none';
+            }
+        }
+
+        // 2. 【ここが重要！】手元のデータベース (db.Tasks) を即座に更新する
+        if (db.Tasks) {
+            // IDが一致するタスクを探してステータス(インデックス5)を書き換える
+            const taskIndex = db.Tasks.findIndex(t => String(t[0]) === String(id));
+            if (taskIndex !== -1) {
+                db.Tasks[taskIndex][5] = newStatus;
+                console.log("Local db.Tasks updated:", id, newStatus);
+            }
+        }
+
+        try {
+            // 3. 裏でGASに保存通信
+            await fetch(GAS_URL, {
+                method: "POST",
+                body: JSON.stringify({ action: "updateStatus", id: id, status: newStatus })
+            });
+        } catch (e) {
+            console.error("保存失敗:", e);
+            alert("保存に失敗しました。再試行してください。");
+            refreshData(); // 失敗した時だけ元の表示に戻す
+        }
+    }
+
+    function copyThreadForGemini(parentId) {
+        const allLogs = db.Logs.slice(1);
+        const parent = allLogs.find(l => String(l[2]) === String(parentId));
+        if (!parent) return;
+
+        const children = allLogs.filter(cl => String(cl[6]) === String(parentId));
+        const sortedChildren = children.sort((a, b) => new Date(a[0]) - new Date(b[0]));
+
+        const category = String(parent[1] || "").trim(); 
+        const content = parent[3];       // D列: 本文
+        const englishDiary = parent[4];  // E列: 英語日記（ここが重要！）
+        const title = parent[5] || '無題'; // F列: 題名
+
+        let instruction = "";
+
+        // カテゴリに応じた指示出し
+        if (category.includes('思考')) {
+            instruction = "私の思考のプロセスを整理し、客観的な視点から深掘りするための質問や、新しい気づきを提案してください。";
+        } else if (category.includes('読書')) {
+            instruction = "この本の要約と私の気づきを踏まえて、他の本との関連性や、実生活でどう活かせるかの具体的なアクションプランを提案してください。";
+        } else if (category.includes('英語')) {
+            instruction = "この英語日記の表現に不自然な点があれば添削し、よりネイティブに近い表現や、関連する便利なフレーズをいくつか教えてください。";
+        } else {
+            instruction = `（カテゴリ：${category}）の内容を踏まえて、あなたと以下の点についてお話ししたいです。`;
+        }
+
+        // --- プロンプトの組み立て開始 ---
+        let prompt = `これまでに以下の様な自己対話（カテゴリ：${category}）をしてきました。\n\n`;
+        prompt += `■ 題名: ${title}\n`;
+        prompt += `■ 開始日: ${formatDate(parent[0])}\n\n`;
+        
+        // 英語日記カテゴリの場合のみ、E列の内容を「英語日記」として追加
+        if (category.includes('英語') && englishDiary && String(englishDiary).trim() !== "") {
+            prompt += `■ 日本語本文:\n${content}\n\n`;
+            prompt += `■ 英語日記:\n${englishDiary}\n\n`;
+        } else {
+            // それ以外は通常の「内容」として表示
+            prompt += `■ 内容:\n${content}\n\n`;
+        }
+
+        // 追記（スレッド）がある場合の処理
+        if (sortedChildren.length > 0) {
+            prompt += `--- 追記履歴 ---\n`;
+            sortedChildren.forEach(cl => {
+                prompt += `[${formatDate(cl[0])}] ${cl[3]}\n`;
+            });
+            prompt += `---------------\n\n`;
+        }
+
+        prompt += `【Geminiへの依頼】\n`;
+        prompt += `${instruction}`;
+        // --- プロンプトの組み立て終了 ---
+
+        // クリップボードにコピー
+        navigator.clipboard.writeText(prompt).then(() => {
+            // Geminiのページを開く
+            window.open('https://gemini.google.com/app', '_blank');
+        }).catch(err => {
+            alert('コピーに失敗しました: ' + err);
+        });
+    }
+    
+</script>
+
+    <div id="review-modal" class="overlay" style="display:none; z-index: 2000; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); align-items: center; justify-content: center;">
+        <div class="form-container" style="max-height: 80vh; overflow-y: auto; background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 500px;">
+            <h3 style="margin-top:0;">月次レビュー作成</h3>
+            
+            <div style="margin-bottom: 20px; padding: 15px; background: #f0f7ff; border-radius: 8px;">
+                <label style="font-size: 0.85rem; font-weight: bold; display: block; margin-bottom: 8px;">レビューする月を選択：</label>
+                <input type="month" id="review-month-picker" onchange="updateReviewContent(this.value)" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+            </div>
+
+            <div id="review-modal-body"></div>
+
+            <div style="display:flex; gap:10px; margin-top:25px; border-top: 1px solid #eee; padding-top: 20px;">
+                <button onclick="document.getElementById('review-modal').style.display='none'" style="flex:1; padding:12px; background:#eee; border:none; border-radius:8px; cursor:pointer;">キャンセル</button>
+                <button id="submit-review-btn" onclick="submitReview()" style="flex:1; padding:12px; background:var(--primary-color); color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">レポート作成・削除</button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
